@@ -28,7 +28,7 @@ Authorization: Bearer <AUTH_TOKEN>
 
 * **FQDNs with trailing dot**: Use trailing dots for zones and record names (e.g., `example.com.`).
   The app auto-appends a dot if missing.
-* **recordID format**: `name:type` (e.g., `www.example.com.:A`).
+* **Record type**: Can be a single type or an array of types (e.g., `["A", "AAAA"]`).
 
 
 ## Endpoints
@@ -126,90 +126,133 @@ Aggregates zones from each PDNS server.
 
 ---
 
-### 4) List Zone Records (RRsets)
+### 4) List Zone Records
 
-**GET** `/zone/:zoneName/records`
+**GET** `/zones/:zone/records/`
 
-Returns RRsets for the zone (one list per server).
+Returns all DNS records (RRsets) for the specified zone.
 
 **Response**
 
 ```json
-[
-  {
-    "name": "example.com.",
-    "type": "SOA",
-    "ttl": 3600,
-    "records": [
-      {
-        "content": "…",
-        "disabled": false
-      }
-    ]
-  },
-  {
-    "name": "www.example.com.",
-    "type": "A",
-    "ttl": 120,
-    "records": [
-      {
-        "content": "203.0.113.42",
-        "disabled": false
-      }
-    ],
-    ...
+{
+  "id": "example.com.",
+  "name": "example.com.",
+  "kind": "Native",
+  "rrsets": [
+    {
+      "name": "example.com.",
+      "type": "SOA",
+      "ttl": 3600,
+      "records": [
+        {
+          "content": "ns1.example.com. hostmaster.example.com. 1 10800 3600 604800 3600",
+          "disabled": false
+        }
+      ]
+    },
+    {
+      "name": "www.example.com.",
+      "type": "A",
+      "ttl": 300,
+      "records": [
+        {
+          "content": "203.0.113.10",
+          "disabled": false
+        }
+      ]
+    }
   ]
+}
 ```
 
 ---
 
-### 5) Create / Replace a Record Set
+### 5) Create DNS Record
 
-**POST** `/zone/:zoneName/records`
+**POST** `/:zone/create`
 
-Create or replace a single RRset in the zone.
+Create one or more DNS records with a simplified request format.
 
 **Request body**
 
 ```json
 {
+  "name": "www.example.com",
+  "type": ["A", "AAAA"],
+  "value": "203.0.113.10",
+  "ttl": 300
+}
+```
+
+**Response**
+
+```json
+{
+  "status": "created",
+  "zone": "example.com.",
   "name": "www.example.com.",
-  "type": "A",
-  "ttl": 300,
-  "contents": ["203.0.113.10", "203.0.113.11"],
-  "disabled": false
+  "types": ["A", "AAAA"]
 }
 ```
 
-
-
 ---
 
-### 6) Update a Record Set (by recordID)
+### 6) Update DNS Record
 
-**PATCH** `/zone/:zoneName/records/:recordID`
+**POST** `/:zone/update`
 
-* `:recordID` format: `name:type` (e.g., `www.example.com.:A`)
+Update one or more DNS records.
 
 **Request body**
 
 ```json
 {
-  "ttl": 120,
-  "contents": ["203.0.113.12"],
-  "disabled": false
+  "name": "www.example.com",
+  "type": ["A"],
+  "value": "203.0.113.20",
+  "ttl": 600
 }
 ```
 
+**Response**
 
+```json
+{
+  "status": "updated",
+  "zone": "example.com.",
+  "name": "www.example.com.",
+  "types": ["A"]
+}
+```
 
 ---
 
-### 7) Delete a Record Set (by recordID)
+### 7) Delete DNS Record
 
-**DELETE** `/zone/:zoneName/records/:recordID`
+**POST** `/:zone/delete`
 
-Deletes the entire RRset (`name:type`).
+Delete one or more DNS records. Only `name` and `type` are required.
+
+**Request body**
+
+```json
+{
+  "name": "www.example.com",
+  "type": ["A", "AAAA"]
+}
+```
+
+**Response**
+
+```json
+{
+  "status": "deleted",
+  "zone": "example.com.",
+  "name": "www.example.com.",
+  "types": ["A", "AAAA"]
+}
+```
 
 
 
@@ -217,7 +260,7 @@ Deletes the entire RRset (`name:type`).
 
 ## Record Content Reference
 
-Common RRtypes and expected `contents` strings:
+Common RRtypes and expected `value` format:
 
 * **A**: IPv4, e.g. `"203.0.113.10"`
 * **AAAA**: IPv6, e.g. `"2001:db8::1"`
@@ -227,8 +270,6 @@ Common RRtypes and expected `contents` strings:
 * **NS**: Nameserver host **with trailing dot**, e.g. `"ns1.example.com."`
 * **SRV**: `"10 5 443 service.example.com."` (priority weight port target.)
 * **CAA**: `"0 issue \"letsencrypt.org\""` (full RFC content as a single string)
-
-> The app converts `contents[]` into PDNS `records[]` with the same `disabled` flag applied to each item.
 
 ---
 
@@ -241,7 +282,6 @@ Common RRtypes and expected `contents` strings:
 ### Authorization Missing/Invalid
 
 * `401 Unauthorized` if `AUTH_TOKEN` is set and missing/invalid.
-
 
 ## cURL Examples
 
@@ -260,28 +300,36 @@ List zones:
 curl -H "Authorization: Bearer $TOKEN" "$BASE/zones"
 ```
 
-Create A record:
+List zone records:
 
 ```bash
-curl -X POST "$BASE/zone/example.com./records" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"www.example.com.","type":"A","ttl":300,"contents":["203.0.113.10"]}'
+curl -H "Authorization: Bearer $TOKEN" "$BASE/zones/example.com./records/"
 ```
 
-Update A record via recordID:
+Create DNS record:
 
 ```bash
-curl -X PATCH "$BASE/zone/example.com./records/www.example.com.:A" \
+curl -X POST "$BASE/example.com/create" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"ttl":120,"contents":["203.0.113.11"]}'
+  -d '{"name":"www.example.com","type":["A"],"value":"203.0.113.10","ttl":300}'
 ```
 
-Delete A record:
+Update DNS record:
 
 ```bash
-curl -X DELETE -H "Authorization: Bearer $TOKEN" \
-  "$BASE/zone/example.com./records/www.example.com.:A"
+curl -X POST "$BASE/example.com/update" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"www.example.com","type":["A"],"value":"203.0.113.20","ttl":600}'
+```
+
+Delete DNS record:
+
+```bash
+curl -X POST "$BASE/example.com/delete" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"www.example.com","type":["A"]}'
 ```
 

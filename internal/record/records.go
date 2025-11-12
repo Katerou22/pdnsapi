@@ -76,6 +76,13 @@ type CreateOrUpdateRRSetReq struct {
 	// If you pass empty Contents with PATCH, we'll REPLACE to empty (which effectively deletes the rrset).
 }
 
+type SimpleRecordReq struct {
+	Name  string   `json:"name"`
+	Type  []string `json:"type"`
+	Value string   `json:"value"`
+	TTL   int      `json:"ttl,omitempty"`
+}
+
 func NewRecordHandler(srvr *server.Server, c *config.Config) *Handler {
 
 	return &Handler{
@@ -98,6 +105,11 @@ func (h *Handler) Routes() {
 
 	// Delete a record set by recordID
 	app.Delete("/zones/:zone/records/:recordID", h.delete)
+
+	// Simplified record management endpoints
+	app.Post("/:zone/create", h.simpleCreate)
+	app.Post("/:zone/update", h.simpleUpdate)
+	app.Post("/:zone/delete", h.simpleDelete)
 
 }
 
@@ -212,4 +224,98 @@ func contentsToRecords(contents []string, disabled bool) []PDNSRecord {
 		records = append(records, PDNSRecord{Content: c, Disabled: disabled})
 	}
 	return records
+}
+
+func (h *Handler) simpleCreate(ctx *fiber.Ctx) error {
+	zone := util.EnsureDot(ctx.Params("zone"))
+	var req SimpleRecordReq
+	if err := ctx.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+	if req.Name == "" || len(req.Type) == 0 || req.Value == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "name, type and value are required")
+	}
+
+	rrsets := make([]PDNSRrsetChange, 0, len(req.Type))
+	for _, t := range req.Type {
+		rr := PDNSRrsetChange{
+			Name:       util.EnsureDot(req.Name),
+			Type:       strings.ToUpper(t),
+			TTL:        req.TTL,
+			ChangeType: "REPLACE",
+			Records:    []PDNSRecord{{Content: req.Value, Disabled: false}},
+		}
+		rrsets = append(rrsets, rr)
+	}
+
+	payload := PDNSZonePatch{RRSets: rrsets}
+	url := h.cfg.PDNSURL(h.cfg.Server, "/zones/"+zone)
+	var out any
+	code, data, err := h.srvr.DoJSON(http.MethodPatch, url, h.cfg.APIKey, payload, &out)
+	if err != nil || code >= 300 {
+		return ctx.Status(code).SendString(string(data))
+	}
+	return ctx.JSON(fiber.Map{"status": "created", "zone": zone, "name": req.Name, "types": req.Type})
+}
+
+func (h *Handler) simpleUpdate(ctx *fiber.Ctx) error {
+	zone := util.EnsureDot(ctx.Params("zone"))
+	var req SimpleRecordReq
+	if err := ctx.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+	if req.Name == "" || len(req.Type) == 0 || req.Value == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "name, type and value are required")
+	}
+
+	rrsets := make([]PDNSRrsetChange, 0, len(req.Type))
+	for _, t := range req.Type {
+		rr := PDNSRrsetChange{
+			Name:       util.EnsureDot(req.Name),
+			Type:       strings.ToUpper(t),
+			TTL:        req.TTL,
+			ChangeType: "REPLACE",
+			Records:    []PDNSRecord{{Content: req.Value, Disabled: false}},
+		}
+		rrsets = append(rrsets, rr)
+	}
+
+	payload := PDNSZonePatch{RRSets: rrsets}
+	url := h.cfg.PDNSURL(h.cfg.Server, "/zones/"+zone)
+	var out any
+	code, data, err := h.srvr.DoJSON(http.MethodPatch, url, h.cfg.APIKey, payload, &out)
+	if err != nil || code >= 300 {
+		return ctx.Status(code).SendString(string(data))
+	}
+	return ctx.JSON(fiber.Map{"status": "updated", "zone": zone, "name": req.Name, "types": req.Type})
+}
+
+func (h *Handler) simpleDelete(ctx *fiber.Ctx) error {
+	zone := util.EnsureDot(ctx.Params("zone"))
+	var req SimpleRecordReq
+	if err := ctx.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+	if req.Name == "" || len(req.Type) == 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "name and type are required")
+	}
+
+	rrsets := make([]PDNSRrsetChange, 0, len(req.Type))
+	for _, t := range req.Type {
+		rr := PDNSRrsetChange{
+			Name:       util.EnsureDot(req.Name),
+			Type:       strings.ToUpper(t),
+			ChangeType: "DELETE",
+		}
+		rrsets = append(rrsets, rr)
+	}
+
+	payload := PDNSZonePatch{RRSets: rrsets}
+	url := h.cfg.PDNSURL(h.cfg.Server, "/zones/"+zone)
+	var out any
+	code, data, err := h.srvr.DoJSON(http.MethodPatch, url, h.cfg.APIKey, payload, &out)
+	if err != nil || code >= 300 {
+		return ctx.Status(code).SendString(string(data))
+	}
+	return ctx.JSON(fiber.Map{"status": "deleted", "zone": zone, "name": req.Name, "types": req.Type})
 }
